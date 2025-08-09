@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepSeek GraphQL API Example</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #005a8b;
+        }
+        .response {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .error {
+            background: #ffebee;
+            border-color: #e57373;
+            color: #c62828;
+        }
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>DeepSeek GraphQL API Frontend Example</h1>
+    
+    <div class="container">
+        <h3>API Endpoint</h3>
+        <input type="text" id="apiEndpoint" placeholder="https://your-worker.your-subdomain.workers.dev" value="" style="width: 100%; padding: 10px;">
+        <p><small>Enter your Cloudflare Worker URL here</small></p>
+    </div>
+
+    <div class="container">
+        <h3>1. Get Available Models</h3>
+        <button onclick="getModels()">Get Models</button>
+        <div id="modelsResponse" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h3>2. Chat with DeepSeek</h3>
+        <textarea id="chatMessage" placeholder="Enter your message here...">Hello! Can you explain what GraphQL is?</textarea>
+        <br>
+        <label>
+            Model: 
+            <select id="chatModel">
+                <option value="deepseek-chat">deepseek-chat</option>
+                <option value="deepseek-coder">deepseek-coder</option>
+                <option value="deepseek-math">deepseek-math</option>
+            </select>
+        </label>
+        <label>
+            Max Tokens: 
+            <input type="number" id="maxTokens" value="200" min="1" max="4000">
+        </label>
+        <label>
+            Temperature: 
+            <input type="number" id="temperature" value="0.7" min="0" max="2" step="0.1">
+        </label>
+        <br>
+        <button onclick="sendChat()">Send Chat</button>
+        <div id="chatResponse" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h3>3. Code Completion</h3>
+        <textarea id="codePrompt" placeholder="Enter your code prompt...">def fibonacci(n):</textarea>
+        <br>
+        <button onclick="getCompletion()">Get Completion</button>
+        <div id="completionResponse" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h3>4. Custom GraphQL Query</h3>
+        <textarea id="customQuery" placeholder="Enter your GraphQL query...">query {
+  models {
+    id
+    object
+    owned_by
+  }
+}</textarea>
+        <br>
+        <button onclick="executeCustomQuery()">Execute Query</button>
+        <div id="customResponse" class="response" style="display: none;"></div>
+    </div>
+
+    <script>
+        function getApiEndpoint() {
+            const endpoint = document.getElementById('apiEndpoint').value.trim();
+            if (!endpoint) {
+                alert('Please enter your API endpoint URL first!');
+                return null;
+            }
+            return endpoint;
+        }
+
+        async function executeGraphQL(query, variables = {}) {
+            const endpoint = getApiEndpoint();
+            if (!endpoint) return;
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        query,
+                        variables
+                    })
+                });
+
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                return {
+                    errors: [{ message: `Network error: ${error.message}` }]
+                };
+            }
+        }
+
+        async function getModels() {
+            const button = event.target;
+            const responseDiv = document.getElementById('modelsResponse');
+            
+            button.classList.add('loading');
+            responseDiv.style.display = 'block';
+            responseDiv.className = 'response';
+            responseDiv.textContent = 'Loading...';
+
+            const query = `
+                query {
+                    models {
+                        id
+                        object
+                        created
+                        owned_by
+                    }
+                }
+            `;
+
+            const result = await executeGraphQL(query);
+            
+            button.classList.remove('loading');
+            
+            if (result.errors) {
+                responseDiv.className = 'response error';
+                responseDiv.textContent = JSON.stringify(result.errors, null, 2);
+            } else {
+                responseDiv.className = 'response';
+                responseDiv.textContent = JSON.stringify(result.data, null, 2);
+            }
+        }
+
+        async function sendChat() {
+            const button = event.target;
+            const responseDiv = document.getElementById('chatResponse');
+            const message = document.getElementById('chatMessage').value;
+            const model = document.getElementById('chatModel').value;
+            const maxTokens = parseInt(document.getElementById('maxTokens').value);
+            const temperature = parseFloat(document.getElementById('temperature').value);
+            
+            if (!message.trim()) {
+                alert('Please enter a message');
+                return;
+            }
+
+            button.classList.add('loading');
+            responseDiv.style.display = 'block';
+            responseDiv.className = 'response';
+            responseDiv.textContent = 'Loading...';
+
+            const query = `
+                mutation($input: ChatInput!) {
+                    chat(input: $input) {
+                        id
+                        choices {
+                            message {
+                                role
+                                content
+                            }
+                            finish_reason
+                        }
+                        usage {
+                            prompt_tokens
+                            completion_tokens
+                            total_tokens
+                        }
+                    }
+                }
+            `;
+
+            const variables = {
+                input: {
+                    model,
+                    messages: [
+                        { role: "user", content: message }
+                    ],
+                    max_tokens: maxTokens,
+                    temperature
+                }
+            };
+
+            const result = await executeGraphQL(query, variables);
+            
+            button.classList.remove('loading');
+            
+            if (result.errors) {
+                responseDiv.className = 'response error';
+                responseDiv.textContent = JSON.stringify(result.errors, null, 2);
+            } else {
+                responseDiv.className = 'response';
+                const chatData = result.data.chat;
+                const content = chatData.choices[0].message.content;
+                const usage = chatData.usage;
+                
+                responseDiv.textContent = `Response:\n${content}\n\nUsage:\n${JSON.stringify(usage, null, 2)}`;
+            }
+        }
+
+        async function getCompletion() {
+            const button = event.target;
+            const responseDiv = document.getElementById('completionResponse');
+            const prompt = document.getElementById('codePrompt').value;
+            
+            if (!prompt.trim()) {
+                alert('Please enter a prompt');
+                return;
+            }
+
+            button.classList.add('loading');
+            responseDiv.style.display = 'block';
+            responseDiv.className = 'response';
+            responseDiv.textContent = 'Loading...';
+
+            const query = `
+                mutation($input: CompletionInput!) {
+                    completion(input: $input) {
+                        id
+                        choices {
+                            text
+                            finish_reason
+                        }
+                        usage {
+                            prompt_tokens
+                            completion_tokens
+                            total_tokens
+                        }
+                    }
+                }
+            `;
+
+            const variables = {
+                input: {
+                    model: "deepseek-coder",
+                    prompt,
+                    max_tokens: 150,
+                    temperature: 0.5
+                }
+            };
+
+            const result = await executeGraphQL(query, variables);
+            
+            button.classList.remove('loading');
+            
+            if (result.errors) {
+                responseDiv.className = 'response error';
+                responseDiv.textContent = JSON.stringify(result.errors, null, 2);
+            } else {
+                responseDiv.className = 'response';
+                const completionData = result.data.completion;
+                const text = completionData.choices[0].text;
+                const usage = completionData.usage;
+                
+                responseDiv.textContent = `Completion:\n${text}\n\nUsage:\n${JSON.stringify(usage, null, 2)}`;
+            }
+        }
+
+        async function executeCustomQuery() {
+            const button = event.target;
+            const responseDiv = document.getElementById('customResponse');
+            const query = document.getElementById('customQuery').value;
+            
+            if (!query.trim()) {
+                alert('Please enter a GraphQL query');
+                return;
+            }
+
+            button.classList.add('loading');
+            responseDiv.style.display = 'block';
+            responseDiv.className = 'response';
+            responseDiv.textContent = 'Loading...';
+
+            const result = await executeGraphQL(query);
+            
+            button.classList.remove('loading');
+            
+            if (result.errors) {
+                responseDiv.className = 'response error';
+                responseDiv.textContent = JSON.stringify(result.errors, null, 2);
+            } else {
+                responseDiv.className = 'response';
+                responseDiv.textContent = JSON.stringify(result, null, 2);
+            }
+        }
+
+        // Set default endpoint if running locally
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            document.getElementById('apiEndpoint').value = 'http://localhost:8787';
+        }
+    </script>
+</body>
+</html>
