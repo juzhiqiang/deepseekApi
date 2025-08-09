@@ -1,0 +1,47 @@
+{
+  "name": "deepseek-graphql-api",
+  "version": "1.0.0",
+  "description": "A GraphQL API built with Cloudflare Workers to proxy requests to DeepSeek API",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:production": "wrangler deploy --env production",
+    "preview": "vite preview",
+    "serve:examples": "vite",
+    "build:examples": "vite build",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "setup": "chmod +x deploy.sh && ./deploy.sh",
+    "logs": "wrangler tail",
+    "secret:set": "wrangler secret put DEEPSEEK_API_KEY",
+    "secret:list": "wrangler secret list"
+  },
+  "keywords": [
+    "cloudflare-workers",
+    "graphql",
+    "deepseek",
+    "api",
+    "proxy",
+    "ai",
+    "llm",
+    "chat",
+    "completion"
+  ],
+  "author": "DeepSeek GraphQL API",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/juzhiqiang/deepseekApi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/juzhiqiang/deepseekApi/issues"
+  },
+  "homepage": "https://github.com/juzhiqiang/deepseekApi#readme",
+  "devDependencies": {
+    "wrangler": "^3.78.12",
+    "vite": "^5.4.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
