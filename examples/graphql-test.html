@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepSeek GraphQL API 测试页面</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .section {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: monospace;
+        }
+        button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px 0;
+        }
+        button:hover {
+            background: #005a8b;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .response {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .error {
+            background: #ffebee;
+            border-color: #e57373;
+            color: #c62828;
+        }
+        .loading {
+            opacity: 0.6;
+        }
+        .query-example {
+            background: #e8f5e8;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 DeepSeek GraphQL API 测试</h1>
+    
+    <div class="section">
+        <h3>🔧 GraphQL 端点</h3>
+        <input type="text" id="apiUrl" placeholder="https://your-worker.workers.dev" 
+               value="https://deepseek.jzq1020814597.workers.dev">
+        <small>GraphQL 端点地址</small>
+    </div>
+
+    <div class="section">
+        <h3>📋 1. 获取模型列表 (Query)</h3>
+        <div class="query-example">query {
+  models {
+    id
+    object
+    owned_by
+    created
+  }
+}</div>
+        <button onclick="getModels()">获取模型列表</button>
+        <div id="modelsResult" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h3>💬 2. 聊天对话 (Mutation)</h3>
+        <label>消息内容:</label>
+        <textarea id="chatMessage" rows="3" placeholder="输入你的消息...">你好，请介绍一下自己</textarea>
+        
+        <label>模型:</label>
+        <select id="chatModel">
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-coder">deepseek-coder</option>
+            <option value="deepseek-math">deepseek-math</option>
+        </select>
+        
+        <label>最大 Token 数:</label>
+        <input type="number" id="chatMaxTokens" value="200" min="1" max="4000">
+        
+        <label>Temperature:</label>
+        <input type="number" id="chatTemperature" value="0.7" min="0" max="2" step="0.1">
+        
+        <div class="query-example">mutation {
+  chat(input: {
+    model: "deepseek-chat"
+    messages: [
+      { role: "user", content: "你好" }
+    ]
+    max_tokens: 200
+    temperature: 0.7
+  }) {
+    choices {
+      message {
+        role
+        content
+      }
+      finish_reason
+    }
+    usage {
+      prompt_tokens
+      completion_tokens
+      total_tokens
+    }
+  }
+}</div>
+        
+        <button onclick="sendChat()">发送聊天</button>
+        <div id="chatResult" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h3>📝 3. 文本补全 (Mutation)</h3>
+        <label>补全提示:</label>
+        <textarea id="completionPrompt" rows="3" placeholder="输入补全提示...">写一个 Python 函数，用于计算斐波那契数列：</textarea>
+        
+        <label>模型:</label>
+        <select id="completionModel">
+            <option value="deepseek-coder">deepseek-coder</option>
+            <option value="deepseek-chat">deepseek-chat</option>
+        </select>
+        
+        <label>最大 Token 数:</label>
+        <input type="number" id="completionMaxTokens" value="200" min="1" max="4000">
+        
+        <div class="query-example">mutation {
+  completion(input: {
+    model: "deepseek-coder"
+    prompt: "写一个Python函数"
+    max_tokens: 200
+  }) {
+    choices {
+      text
+      finish_reason
+    }
+    usage {
+      total_tokens
+    }
+  }
+}</div>
+        
+        <button onclick="getCompletion()">获取补全</button>
+        <div id="completionResult" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h3>🧪 4. 自定义 GraphQL 查询</h3>
+        <label>GraphQL 查询:</label>
+        <textarea id="customQuery" rows="8" placeholder="输入 GraphQL 查询...">query {
+  hello
+  models {
+    id
+    object
+  }
+}</textarea>
+        
+        <button onclick="executeCustomQuery()">执行查询</button>
+        <div id="customResult" class="response" style="display: none;"></div>
+    </div>
+
+    <script>
+        function getApiUrl() {
+            const url = document.getElementById('apiUrl').value.trim();
+            if (!url) {
+                alert('请先输入 GraphQL 端点地址');
+                return null;
+            }
+            return url;
+        }
+
+        function showResult(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = isError ? 'response error' : 'response';
+            element.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        }
+
+        function setLoading(buttonElement, isLoading) {
+            if (isLoading) {
+                buttonElement.disabled = true;
+                buttonElement.classList.add('loading');
+                buttonElement.textContent = '处理中...';
+            } else {
+                buttonElement.disabled = false;
+                buttonElement.classList.remove('loading');
+            }
+        }
+
+        async function executeGraphQL(query, variables = {}) {
+            const apiUrl = getApiUrl();
+            if (!apiUrl) return null;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        query,
+                        variables
+                    })
+                });
+
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                return {
+                    errors: [{ message: `网络错误: ${error.message}` }]
+                };
+            }
+        }
+
+        async function getModels() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const query = `
+                    query {
+                        models {
+                            id
+                            object
+                            owned_by
+                            created
+                        }
+                    }
+                `;
+
+                const result = await executeGraphQL(query);
+                
+                if (result.errors) {
+                    showResult('modelsResult', result, true);
+                } else {
+                    showResult('modelsResult', result);
+                }
+            } catch (error) {
+                showResult('modelsResult', `错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+
+        async function sendChat() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const message = document.getElementById('chatMessage').value.trim();
+                if (!message) {
+                    alert('请输入消息');
+                    return;
+                }
+
+                const model = document.getElementById('chatModel').value;
+                const maxTokens = parseInt(document.getElementById('chatMaxTokens').value);
+                const temperature = parseFloat(document.getElementById('chatTemperature').value);
+
+                const query = `
+                    mutation($input: ChatInput!) {
+                        chat(input: $input) {
+                            id
+                            model
+                            choices {
+                                message {
+                                    role
+                                    content
+                                }
+                                finish_reason
+                            }
+                            usage {
+                                prompt_tokens
+                                completion_tokens
+                                total_tokens
+                            }
+                        }
+                    }
+                `;
+
+                const variables = {
+                    input: {
+                        model,
+                        messages: [
+                            { role: 'user', content: message }
+                        ],
+                        max_tokens: maxTokens,
+                        temperature
+                    }
+                };
+
+                const result = await executeGraphQL(query, variables);
+                
+                if (result.errors) {
+                    showResult('chatResult', result, true);
+                } else {
+                    showResult('chatResult', result);
+                }
+            } catch (error) {
+                showResult('chatResult', `错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+
+        async function getCompletion() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const prompt = document.getElementById('completionPrompt').value.trim();
+                if (!prompt) {
+                    alert('请输入补全提示');
+                    return;
+                }
+
+                const model = document.getElementById('completionModel').value;
+                const maxTokens = parseInt(document.getElementById('completionMaxTokens').value);
+
+                const query = `
+                    mutation($input: CompletionInput!) {
+                        completion(input: $input) {
+                            id
+                            model
+                            choices {
+                                text
+                                finish_reason
+                            }
+                            usage {
+                                prompt_tokens
+                                completion_tokens
+                                total_tokens
+                            }
+                        }
+                    }
+                `;
+
+                const variables = {
+                    input: {
+                        model,
+                        prompt,
+                        max_tokens: maxTokens,
+                        temperature: 0.7
+                    }
+                };
+
+                const result = await executeGraphQL(query, variables);
+                
+                if (result.errors) {
+                    showResult('completionResult', result, true);
+                } else {
+                    showResult('completionResult', result);
+                }
+            } catch (error) {
+                showResult('completionResult', `错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+
+        async function executeCustomQuery() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const query = document.getElementById('customQuery').value.trim();
+                if (!query) {
+                    alert('请输入 GraphQL 查询');
+                    return;
+                }
+
+                const result = await executeGraphQL(query);
+                
+                if (result.errors) {
+                    showResult('customResult', result, true);
+                } else {
+                    showResult('customResult', result);
+                }
+            } catch (error) {
+                showResult('customResult', `错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+    </script>
+</body>
+</html>
