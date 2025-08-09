@@ -211,16 +211,16 @@ class GraphQLExecutor {
     let operationType = 'query';
     let operationContent = withoutComments;
     
-    if (withoutComments.match(/^\\s*mutation/i)) {
+    if (withoutComments.match(/^\s*mutation/i)) {
       operationType = 'mutation';
-      operationContent = withoutComments.replace(/^\\s*mutation[^{]*\\{/, '{');
-    } else if (withoutComments.match(/^\\s*query/i)) {
+      operationContent = withoutComments.replace(/^\s*mutation[^{]*{/, '{');
+    } else if (withoutComments.match(/^\s*query/i)) {
       operationType = 'query';
-      operationContent = withoutComments.replace(/^\\s*query[^{]*\\{/, '{');
+      operationContent = withoutComments.replace(/^\s*query[^{]*{/, '{');
     }
     
     // 提取主体内容
-    const bodyMatch = operationContent.match(/\\{([\\s\\S]+)\\}$/);
+    const bodyMatch = operationContent.match(/{([\s\S]+)}$/);
     if (!bodyMatch) {
       throw new Error('Invalid GraphQL syntax: missing operation body');
     }
@@ -236,7 +236,7 @@ class GraphQLExecutor {
   
   static parseFields(content) {
     const fields = [];
-    const lines = content.split('\\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+    const lines = content.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
     
     let currentField = null;
     let braceLevel = 0;
@@ -244,12 +244,12 @@ class GraphQLExecutor {
     
     for (const line of lines) {
       // 计算大括号层级
-      const openBraces = (line.match(/\\{/g) || []).length;
-      const closeBraces = (line.match(/\\}/g) || []).length;
+      const openBraces = (line.match(/{/g) || []).length;
+      const closeBraces = (line.match(/}/g) || []).length;
       
       if (braceLevel === 0) {
         // 顶级字段
-        const fieldMatch = line.match(/^(\\w+)(\\s*\\([^)]*\\))?\\s*(\\{.*)?$/);
+        const fieldMatch = line.match(/^(\w+)(\s*\([^)]*\))?\s*({.*)?$/);
         if (fieldMatch) {
           if (currentField) {
             fields.push(currentField);
@@ -298,13 +298,13 @@ class GraphQLExecutor {
     if (!argsString || !argsString.trim()) return {};
     
     // 移除括号
-    const content = argsString.replace(/^\\s*\\(\\s*/, '').replace(/\\s*\\)\\s*$/, '');
+    const content = argsString.replace(/^\s*\(\s*/, '').replace(/\s*\)\s*$/, '');
     if (!content) return {};
     
     const args = {};
     
     // 简单解析参数（支持基本类型）
-    const argPattern = /(\\w+)\\s*:\\s*([^,}]+)/g;
+    const argPattern = /(\w+)\s*:\s*([^,}]+)/g;
     let match;
     
     while ((match = argPattern.exec(content)) !== null) {
@@ -341,9 +341,9 @@ class GraphQLExecutor {
   
   static parseInputObject(objString) {
     const obj = {};
-    const content = objString.replace(/^\\s*\\{\\s*/, '').replace(/\\s*\\}\\s*$/, '');
+    const content = objString.replace(/^\s*{\s*/, '').replace(/\s*}\s*$/, '');
     
-    const fieldPattern = /(\\w+)\\s*:\\s*([^,}]+)/g;
+    const fieldPattern = /(\w+)\s*:\s*([^,}]+)/g;
     let match;
     
     while ((match = fieldPattern.exec(content)) !== null) {
@@ -369,11 +369,11 @@ class GraphQLExecutor {
   }
   
   static parseInputArray(arrString) {
-    const content = arrString.replace(/^\\s*\\[\\s*/, '').replace(/\\s*\\]\\s*$/, '');
+    const content = arrString.replace(/^\s*\[\s*/, '').replace(/\s*\]\s*$/, '');
     if (!content) return [];
     
     const items = [];
-    const itemPattern = /\\{([^}]+)\\}/g;
+    const itemPattern = /{([^}]+)}/g;
     let match;
     
     while ((match = itemPattern.exec(content)) !== null) {
@@ -385,7 +385,7 @@ class GraphQLExecutor {
   
   static parseSelectionSet(content) {
     const selections = [];
-    const fields = content.match(/\\w+/g) || [];
+    const fields = content.match(/\w+/g) || [];
     return fields;
   }
   
