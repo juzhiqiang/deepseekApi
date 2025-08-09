@@ -1,200 +1,426 @@
-# DeepSeek API Worker
+# DeepSeek GraphQL API Worker
 
-一个简单的 Cloudflare Workers 代理服务，为前端提供 DeepSeek API 接口。
+🚀 专为前端调用设计的 DeepSeek GraphQL API 代理服务，部署在 Cloudflare Workers 上。
 
-## 🚀 一键部署
+## ✨ 特性
 
+- ✅ **GraphQL 接口** - 统一端点，灵活查询
+- ✅ **CORS 支持** - 前端可直接跨域调用  
+- ✅ **类型安全** - 完整的 GraphQL Schema
+- ✅ **零配置** - 一键部署即可使用
+- ✅ **高性能** - Cloudflare 边缘计算
+
+## 🚀 快速开始
+
+### 1. 部署 API
 ```bash
-# 1. 克隆项目
+# 克隆项目
 git clone https://github.com/juzhiqiang/deepseekApi.git
 cd deepseekApi
 
-# 2. 安装依赖
+# 安装依赖
 npm install
 
-# 3. 一键设置和部署
-chmod +x setup.sh && ./setup.sh
+# 部署 (API 密钥已配置)
+wrangler deploy
 ```
 
-就这么简单！脚本会自动：
-- 安装 Wrangler CLI
-- 登录 Cloudflare
-- 设置 API 密钥
-- 部署到 Workers
+### 2. 测试 API
+访问: https://deepseek.jzq1020814597.workers.dev
 
-## 📡 API 接口
+## 📡 GraphQL Schema
 
-### 1. 获取模型列表
-```bash
-GET https://your-worker.workers.dev/api/models
-```
-
-### 2. 聊天对话
-```bash
-POST https://your-worker.workers.dev/api/chat
-Content-Type: application/json
-
-{
-  "model": "deepseek-chat",
-  "messages": [
-    { "role": "user", "content": "你好" }
-  ],
-  "max_tokens": 200,
-  "temperature": 0.7
+### Queries (查询)
+```graphql
+type Query {
+  hello: String!           # 健康检查
+  models: [Model!]!        # 获取可用模型
 }
 ```
 
-### 3. 文本补全
-```bash
-POST https://your-worker.workers.dev/api/completions
-Content-Type: application/json
+### Mutations (变更)
+```graphql
+type Mutation {
+  chat(input: ChatInput!): ChatResponse!           # 聊天对话
+  completion(input: CompletionInput!): CompletionResponse!  # 文本补全
+}
+```
 
-{
-  "model": "deepseek-coder",
-  "prompt": "写一个Python函数",
-  "max_tokens": 200,
-  "temperature": 0.7
+### 完整类型定义
+```graphql
+type Model {
+  id: String!
+  object: String!
+  created: Int!
+  owned_by: String!
+}
+
+type ChatResponse {
+  id: String!
+  object: String!
+  created: Int!
+  model: String!
+  choices: [ChatChoice!]!
+  usage: Usage!
+}
+
+type ChatChoice {
+  index: Int!
+  message: Message!
+  finish_reason: String
+}
+
+type Message {
+  role: String!
+  content: String!
+}
+
+input ChatInput {
+  model: String! = "deepseek-chat"
+  messages: [MessageInput!]!
+  max_tokens: Int = 1000
+  temperature: Float = 0.7
+  top_p: Float = 1.0
+}
+
+input MessageInput {
+  role: String!
+  content: String!
 }
 ```
 
 ## 🌐 前端使用示例
 
-### 基础用法
+### 1. 基础 JavaScript
 ```javascript
-// 聊天示例
-const response = await fetch('https://your-worker.workers.dev/api/chat', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    model: 'deepseek-chat',
+// GraphQL 查询函数
+async function graphqlQuery(query, variables = {}) {
+  const response = await fetch('https://deepseek.jzq1020814597.workers.dev', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ query, variables })
+  });
+  
+  return await response.json();
+}
+
+// 获取模型列表
+const models = await graphqlQuery(`
+  query {
+    models {
+      id
+      object
+      owned_by
+    }
+  }
+`);
+console.log(models.data.models);
+
+// 聊天对话
+const chatResult = await graphqlQuery(`
+  mutation($input: ChatInput!) {
+    chat(input: $input) {
+      choices {
+        message {
+          content
+        }
+      }
+      usage {
+        total_tokens
+      }
+    }
+  }
+`, {
+  input: {
     messages: [
       { role: 'user', content: '你好，请介绍一下自己' }
     ],
     max_tokens: 200
-  })
+  }
 });
-
-const data = await response.json();
-console.log(data.choices[0].message.content);
+console.log(chatResult.data.chat.choices[0].message.content);
 ```
 
-### Vue.js 示例
-```javascript
-// 在 Vue 组件中使用
+### 2. React + Apollo Client
+```jsx
+import { ApolloClient, InMemoryCache, gql, useQuery, useMutation } from '@apollo/client';
+
+const client = new ApolloClient({
+  uri: 'https://deepseek.jzq1020814597.workers.dev',
+  cache: new InMemoryCache()
+});
+
+// 查询组件
+function ModelsList() {
+  const { loading, error, data } = useQuery(gql`
+    query GetModels {
+      models {
+        id
+        object
+        owned_by
+      }
+    }
+  `);
+
+  if (loading) return <p>Loading...</p>;
+  if (error) return <p>Error: {error.message}</p>;
+
+  return (
+    <ul>
+      {data.models.map(model => (
+        <li key={model.id}>{model.id} - {model.owned_by}</li>
+      ))}
+    </ul>
+  );
+}
+
+// 聊天组件
+function ChatComponent() {
+  const [sendMessage] = useMutation(gql`
+    mutation SendChat($input: ChatInput!) {
+      chat(input: $input) {
+        choices {
+          message {
+            content
+          }
+        }
+      }
+    }
+  `);
+
+  const handleSend = async (message) => {
+    const result = await sendMessage({
+      variables: {
+        input: {
+          messages: [{ role: 'user', content: message }],
+          max_tokens: 200
+        }
+      }
+    });
+    
+    console.log(result.data.chat.choices[0].message.content);
+  };
+
+  return (
+    <button onClick={() => handleSend('Hello!')}>
+      Send Message
+    </button>
+  );
+}
+```
+
+### 3. Vue.js 示例
+```vue
+<template>
+  <div>
+    <div>
+      <input v-model="message" placeholder="输入消息..." />
+      <button @click="sendMessage" :disabled="loading">
+        {{ loading ? '发送中...' : '发送' }}
+      </button>
+    </div>
+    <div v-if="response">
+      <h3>回复:</h3>
+      <p>{{ response }}</p>
+    </div>
+  </div>
+</template>
+
+<script>
 export default {
   data() {
     return {
       message: '',
-      response: ''
+      response: '',
+      loading: false
     }
   },
   methods: {
     async sendMessage() {
+      if (!this.message.trim()) return;
+      
+      this.loading = true;
       try {
-        const res = await fetch('https://your-worker.workers.dev/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'deepseek-chat',
+        const result = await this.graphqlQuery(`
+          mutation($input: ChatInput!) {
+            chat(input: $input) {
+              choices {
+                message {
+                  content
+                }
+              }
+            }
+          }
+        `, {
+          input: {
             messages: [{ role: 'user', content: this.message }],
             max_tokens: 200
-          })
+          }
         });
         
-        const data = await res.json();
-        this.response = data.choices[0].message.content;
+        this.response = result.data.chat.choices[0].message.content;
+        this.message = '';
       } catch (error) {
         console.error('Error:', error);
+      } finally {
+        this.loading = false;
       }
+    },
+    
+    async graphqlQuery(query, variables = {}) {
+      const response = await fetch('https://deepseek.jzq1020814597.workers.dev', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables })
+      });
+      return await response.json();
+    }
+  }
+}
+</script>
+```
+
+### 4. 文本补全示例
+```javascript
+// 代码补全
+const completion = await graphqlQuery(`
+  mutation($input: CompletionInput!) {
+    completion(input: $input) {
+      choices {
+        text
+      }
+      usage {
+        total_tokens
+      }
+    }
+  }
+`, {
+  input: {
+    model: 'deepseek-coder',
+    prompt: 'def fibonacci(n):',
+    max_tokens: 150
+  }
+});
+
+console.log(completion.data.completion.choices[0].text);
+```
+
+## 🧪 测试页面
+
+打开 `examples/graphql-test.html` 进行完整的 GraphQL API 测试，包含：
+- 模型查询
+- 聊天对话
+- 文本补全
+- 自定义 GraphQL 查询
+
+## 📊 可用模型
+
+- `deepseek-chat` - 通用对话模型
+- `deepseek-coder` - 代码生成和编程
+- `deepseek-math` - 数学推理和计算
+
+## 🔧 GraphQL 查询示例
+
+### 获取所有模型
+```graphql
+query {
+  models {
+    id
+    object
+    owned_by
+    created
+  }
+}
+```
+
+### 聊天对话
+```graphql
+mutation {
+  chat(input: {
+    model: "deepseek-chat"
+    messages: [
+      { role: "user", content: "解释什么是GraphQL" }
+    ]
+    max_tokens: 300
+    temperature: 0.7
+  }) {
+    id
+    choices {
+      message {
+        role
+        content
+      }
+      finish_reason
+    }
+    usage {
+      prompt_tokens
+      completion_tokens
+      total_tokens
     }
   }
 }
 ```
 
-### React 示例
-```javascript
-import { useState } from 'react';
-
-function ChatComponent() {
-  const [message, setMessage] = useState('');
-  const [response, setResponse] = useState('');
-
-  const sendMessage = async () => {
-    try {
-      const res = await fetch('https://your-worker.workers.dev/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'deepseek-chat',
-          messages: [{ role: 'user', content: message }],
-          max_tokens: 200
-        })
-      });
-      
-      const data = await res.json();
-      setResponse(data.choices[0].message.content);
-    } catch (error) {
-      console.error('Error:', error);
+### 代码补全
+```graphql
+mutation {
+  completion(input: {
+    model: "deepseek-coder"
+    prompt: "// 创建一个React组件\nfunction Button("
+    max_tokens: 200
+  }) {
+    choices {
+      text
+      finish_reason
     }
-  };
-
-  return (
-    <div>
-      <input 
-        value={message} 
-        onChange={(e) => setMessage(e.target.value)} 
-        placeholder="输入消息..." 
-      />
-      <button onClick={sendMessage}>发送</button>
-      <div>{response}</div>
-    </div>
-  );
+    usage {
+      total_tokens
+    }
+  }
 }
 ```
-
-## 🧪 测试页面
-
-打开 `examples/test.html` 可以直接测试所有接口功能。
-
-![测试页面](https://your-worker.workers.dev)
-
-## ⚙️ 手动配置（可选）
-
-如果需要手动设置：
-
-```bash
-# 设置 API 密钥
-wrangler secret put DEEPSEEK_API_KEY
-# 输入: sk-76c8f552ea8640a49376fcf64b1d5fc8
-
-# 部署
-npm run deploy
-```
-
-## 📊 可用模型
-
-- `deepseek-chat` - 通用对话模型
-- `deepseek-coder` - 代码生成模型  
-- `deepseek-math` - 数学推理模型
 
 ## 🔒 安全说明
 
 - API 密钥安全存储在 Cloudflare Workers 环境变量中
 - 支持 CORS，允许前端跨域访问
-- 所有请求通过 HTTPS 加密
+- 所有请求通过 HTTPS 加密传输
+- GraphQL 查询参数验证和错误处理
 
-## 📈 费用说明
+## 📈 性能优势
 
-- Cloudflare Workers: 每天 100,000 次免费请求
-- DeepSeek API: 根据使用量计费
-- 部署完全免费
+- **边缘计算**: Cloudflare 全球 CDN 网络
+- **低延迟**: 就近访问最快节点
+- **高可用**: 99.9% 可用性保证
+- **免费额度**: 每天 100,000 次请求
+
+## 🛠️ 开发工具
+
+推荐使用以下工具进行 GraphQL 开发：
+
+- **GraphQL Playground**: 在线查询测试
+- **Apollo Client DevTools**: React/Vue 调试
+- **GraphiQL**: 桌面端 GraphQL IDE
+- **Insomnia**: REST/GraphQL 客户端
 
 ## 🤝 问题反馈
 
-如有问题，请提交 [Issue](https://github.com/juzhiqiang/deepseekApi/issues)
+如遇到问题，请：
+1. 查看 [GitHub Issues](https://github.com/juzhiqiang/deepseekApi/issues)
+2. 检查 GraphQL 查询语法
+3. 验证 API 密钥配置
+4. 查看 Cloudflare Workers 日志
 
 ## 📄 许可证
 
-MIT License
+MIT License - 详见 [LICENSE](LICENSE) 文件
+
+---
+
+**🎯 现在你有了一个完整的 GraphQL API！**
+
+- **端点**: https://deepseek.jzq1020814597.workers.dev  
+- **测试页面**: `examples/graphql-test.html`
+- **GitHub**: https://github.com/juzhiqiang/deepseekApi
