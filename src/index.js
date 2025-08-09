@@ -198,96 +198,152 @@ const resolvers = {
   }
 };
 
-// 简化的 GraphQL 解析器
-class SimpleGraphQL {
-  static parse(query) {
+// 简化但规范的 GraphQL 执行器
+class GraphQLExecutor {
+  static parseQuery(query) {
+    // 简单的查询解析器，支持基本的 GraphQL 语法
     const trimmed = query.trim();
     
-    // 检测操作类型
-    const isQuery = trimmed.startsWith('query') || (!trimmed.startsWith('mutation') && !trimmed.startsWith('subscription'));
-    const isMutation = trimmed.startsWith('mutation');
+    // 移除注释
+    const withoutComments = trimmed.replace(/#[^\r\n]*/g, '');
     
-    // 提取字段
-    const fieldMatch = trimmed.match(/\{([^}]+)\}/);
-    if (!fieldMatch) {
-      throw new Error('Invalid GraphQL syntax');
+    // 检测操作类型
+    let operationType = 'query';
+    let operationContent = withoutComments;
+    
+    if (withoutComments.match(/^\\s*mutation/i)) {
+      operationType = 'mutation';
+      operationContent = withoutComments.replace(/^\\s*mutation[^{]*\\{/, '{');
+    } else if (withoutComments.match(/^\\s*query/i)) {
+      operationType = 'query';
+      operationContent = withoutComments.replace(/^\\s*query[^{]*\\{/, '{');
     }
     
-    const fieldsContent = fieldMatch[1];
-    const fields = this.parseFields(fieldsContent);
+    // 提取主体内容
+    const bodyMatch = operationContent.match(/\\{([\\s\\S]+)\\}$/);
+    if (!bodyMatch) {
+      throw new Error('Invalid GraphQL syntax: missing operation body');
+    }
+    
+    const body = bodyMatch[1];
+    const fields = this.parseFields(body);
     
     return {
-      operationType: isQuery ? 'query' : 'mutation',
+      operationType,
       fields
     };
   }
   
   static parseFields(content) {
     const fields = [];
+    const lines = content.split('\\n').map(line => line.trim()).filter(line => line && !line.startsWith('#'));
     
-    // 匹配字段和参数
-    const fieldPattern = /(\\w+)(?:\\s*\\(([^)]+)\\))?(?:\\s*\\{([^}]+)\\})?/g;
-    let match;
+    let currentField = null;
+    let braceLevel = 0;
+    let fieldContent = '';
     
-    while ((match = fieldPattern.exec(content)) !== null) {
-      const fieldName = match[1];
-      const argsString = match[2];
-      const subFields = match[3];
+    for (const line of lines) {
+      // 计算大括号层级
+      const openBraces = (line.match(/\\{/g) || []).length;
+      const closeBraces = (line.match(/\\}/g) || []).length;
       
-      const field = {
-        name: fieldName,
-        arguments: this.parseArguments(argsString || ''),
-        selectionSet: subFields ? subFields.split(/\\s+/).filter(s => s) : []
-      };
-      
-      fields.push(field);
+      if (braceLevel === 0) {
+        // 顶级字段
+        const fieldMatch = line.match(/^(\\w+)(\\s*\\([^)]*\\))?\\s*(\\{.*)?$/);
+        if (fieldMatch) {
+          if (currentField) {
+            fields.push(currentField);
+          }
+          
+          currentField = {
+            name: fieldMatch[1],
+            arguments: this.parseArguments(fieldMatch[2] || ''),
+            selectionSet: []
+          };
+          
+          fieldContent = fieldMatch[3] || '';
+          braceLevel += openBraces;
+          braceLevel -= closeBraces;
+          
+          if (braceLevel === 0 && !fieldMatch[3]) {
+            // 简单字段，没有子选择
+            fields.push(currentField);
+            currentField = null;
+          }
+        }
+      } else {
+        // 在字段内部
+        fieldContent += ' ' + line;
+        braceLevel += openBraces;
+        braceLevel -= closeBraces;
+        
+        if (braceLevel === 0) {
+          // 字段结束
+          currentField.selectionSet = this.parseSelectionSet(fieldContent);
+          fields.push(currentField);
+          currentField = null;
+          fieldContent = '';
+        }
+      }
+    }
+    
+    if (currentField) {
+      fields.push(currentField);
     }
     
     return fields;
   }
   
   static parseArguments(argsString) {
-    if (!argsString.trim()) return {};
+    if (!argsString || !argsString.trim()) return {};
+    
+    // 移除括号
+    const content = argsString.replace(/^\\s*\\(\\s*/, '').replace(/\\s*\\)\\s*$/, '');
+    if (!content) return {};
     
     const args = {};
     
-    // 处理嵌套对象参数
-    const argPattern = /(\\w+):\\s*([^,}]+)/g;
+    // 简单解析参数（支持基本类型）
+    const argPattern = /(\\w+)\\s*:\\s*([^,}]+)/g;
     let match;
     
-    while ((match = argPattern.exec(argsString)) !== null) {
+    while ((match = argPattern.exec(content)) !== null) {
       const key = match[1];
       let value = match[2].trim();
       
-      // 解析值类型
-      if (value.startsWith('{') && value.endsWith('}')) {
-        // 对象类型
-        value = this.parseObjectValue(value);
-      } else if (value.startsWith('[') && value.endsWith(']')) {
-        // 数组类型
-        value = this.parseArrayValue(value);
+      // 解析值
+      if (value.startsWith('$')) {
+        // 变量引用，暂时跳过
+        continue;
       } else if (value.startsWith('"') && value.endsWith('"')) {
         // 字符串
-        value = value.slice(1, -1);
+        args[key] = value.slice(1, -1);
       } else if (value === 'true' || value === 'false') {
         // 布尔值
-        value = value === 'true';
-      } else if (!isNaN(value)) {
+        args[key] = value === 'true';
+      } else if (!isNaN(value) && !isNaN(parseFloat(value))) {
         // 数字
-        value = parseFloat(value);
+        args[key] = parseFloat(value);
+      } else if (value.startsWith('{')) {
+        // 对象（输入类型）
+        args[key] = this.parseInputObject(value);
+      } else if (value.startsWith('[')) {
+        // 数组
+        args[key] = this.parseInputArray(value);
+      } else {
+        // 其他类型，作为字符串处理
+        args[key] = value;
       }
-      
-      args[key] = value;
     }
     
     return args;
   }
   
-  static parseObjectValue(objString) {
+  static parseInputObject(objString) {
     const obj = {};
-    const content = objString.slice(1, -1); // 移除 {}
+    const content = objString.replace(/^\\s*\\{\\s*/, '').replace(/\\s*\\}\\s*$/, '');
     
-    const fieldPattern = /(\\w+):\\s*([^,}]+)/g;
+    const fieldPattern = /(\\w+)\\s*:\\s*([^,}]+)/g;
     let match;
     
     while ((match = fieldPattern.exec(content)) !== null) {
@@ -295,61 +351,63 @@ class SimpleGraphQL {
       let value = match[2].trim();
       
       if (value.startsWith('"') && value.endsWith('"')) {
-        value = value.slice(1, -1);
+        obj[key] = value.slice(1, -1);
       } else if (value === 'true' || value === 'false') {
-        value = value === 'true';
+        obj[key] = value === 'true';
       } else if (!isNaN(value)) {
-        value = parseFloat(value);
+        obj[key] = parseFloat(value);
+      } else if (value.startsWith('[')) {
+        obj[key] = this.parseInputArray(value);
+      } else if (value.startsWith('{')) {
+        obj[key] = this.parseInputObject(value);
+      } else {
+        obj[key] = value;
       }
-      
-      obj[key] = value;
     }
     
     return obj;
   }
   
-  static parseArrayValue(arrString) {
-    const content = arrString.slice(1, -1); // 移除 []
-    if (!content.trim()) return [];
+  static parseInputArray(arrString) {
+    const content = arrString.replace(/^\\s*\\[\\s*/, '').replace(/\\s*\\]\\s*$/, '');
+    if (!content) return [];
     
-    // 简单处理，假设数组元素是对象
-    if (content.includes('{')) {
-      const objects = [];
-      const objPattern = /\\{([^}]+)\\}/g;
-      let match;
-      
-      while ((match = objPattern.exec(content)) !== null) {
-        objects.push(this.parseObjectValue(`{${match[1]}}`));
-      }
-      
-      return objects;
+    const items = [];
+    const itemPattern = /\\{([^}]+)\\}/g;
+    let match;
+    
+    while ((match = itemPattern.exec(content)) !== null) {
+      items.push(this.parseInputObject(`{${match[1]}}`));
     }
     
-    // 简单值数组
-    return content.split(',').map(item => {
-      item = item.trim();
-      if (item.startsWith('"') && item.endsWith('"')) {
-        return item.slice(1, -1);
-      }
-      return item;
-    });
+    return items;
   }
   
-  static async execute(query, variables, context) {
+  static parseSelectionSet(content) {
+    const selections = [];
+    const fields = content.match(/\\w+/g) || [];
+    return fields;
+  }
+  
+  static async execute(query, variables = {}, context) {
     try {
-      const parsed = this.parse(query);
+      const parsed = this.parseQuery(query);
       const result = { data: {} };
       
       for (const field of parsed.fields) {
         if (parsed.operationType === 'query') {
           if (resolvers.Query[field.name]) {
-            result.data[field.name] = await resolvers.Query[field.name](null, field.arguments, context);
+            // 处理变量替换
+            const args = this.resolveVariables(field.arguments, variables);
+            result.data[field.name] = await resolvers.Query[field.name](null, args, context);
           } else {
             throw new Error(`Unknown query field: ${field.name}`);
           }
         } else if (parsed.operationType === 'mutation') {
           if (resolvers.Mutation[field.name]) {
-            result.data[field.name] = await resolvers.Mutation[field.name](null, field.arguments, context);
+            // 处理变量替换
+            const args = this.resolveVariables(field.arguments, variables);
+            result.data[field.name] = await resolvers.Mutation[field.name](null, args, context);
           } else {
             throw new Error(`Unknown mutation field: ${field.name}`);
           }
@@ -361,12 +419,34 @@ class SimpleGraphQL {
       return {
         errors: [{
           message: error.message,
+          locations: [],
+          path: [],
           extensions: {
             code: 'INTERNAL_ERROR'
           }
         }]
       };
     }
+  }
+  
+  static resolveVariables(args, variables) {
+    // 简单的变量解析
+    const resolved = {};
+    
+    for (const [key, value] of Object.entries(args)) {
+      if (typeof value === 'string' && value.startsWith('$')) {
+        const varName = value.substring(1);
+        if (variables.hasOwnProperty(varName)) {
+          resolved[key] = variables[varName];
+        } else {
+          throw new Error(`Variable "$${varName}" not provided`);
+        }
+      } else {
+        resolved[key] = value;
+      }
+    }
+    
+    return resolved;
   }
 }
 
@@ -387,7 +467,10 @@ export default {
       if (!env.DEEPSEEK_API_KEY) {
         return new Response(
           JSON.stringify({
-            errors: [{ message: 'API Key not configured' }]
+            errors: [{ 
+              message: 'API Key not configured',
+              extensions: { code: 'CONFIGURATION_ERROR' }
+            }]
           }),
           {
             status: 500,
@@ -399,12 +482,15 @@ export default {
       // GraphQL 端点
       if ((url.pathname === '/' || url.pathname === '/graphql') && request.method === 'POST') {
         const body = await request.json();
-        const { query, variables = {} } = body;
+        const { query, variables = {}, operationName } = body;
 
         if (!query) {
           return new Response(
             JSON.stringify({
-              errors: [{ message: 'No query provided' }]
+              errors: [{ 
+                message: 'No query provided in request body',
+                extensions: { code: 'BAD_REQUEST' }
+              }]
             }),
             {
               status: 400,
@@ -414,7 +500,7 @@ export default {
         }
 
         // 执行 GraphQL 查询
-        const result = await SimpleGraphQL.execute(query, variables, { env });
+        const result = await GraphQLExecutor.execute(query, variables, { env });
 
         return new Response(JSON.stringify(result), {
           status: 200,
@@ -422,19 +508,41 @@ export default {
         });
       }
 
-      // GraphQL Playground (GET 请求返回 Schema 信息)
+      // GraphQL Schema 信息 (GET 请求)
       if ((url.pathname === '/' || url.pathname === '/graphql') && request.method === 'GET') {
         return new Response(
           JSON.stringify({
-            message: 'DeepSeek GraphQL API',
-            endpoints: {
-              graphql: 'POST /',
-              playground: 'GET /'
-            },
-            schema: typeDefs,
-            examples: {
-              query: `query { models { id object owned_by } }`,
-              mutation: `mutation { chat(input: { messages: [{ role: "user", content: "Hello" }] }) { choices { message { content } } } }`
+            data: {
+              message: 'DeepSeek GraphQL API',
+              version: '1.0.0',
+              endpoint: url.origin + '/',
+              schema: typeDefs,
+              examples: {
+                getModels: {
+                  query: 'query { models { id object owned_by } }',
+                  description: '获取可用模型列表'
+                },
+                chat: {
+                  query: 'mutation($input: ChatInput!) { chat(input: $input) { choices { message { content } } usage { total_tokens } } }',
+                  variables: {
+                    input: {
+                      messages: [{ role: 'user', content: 'Hello!' }],
+                      max_tokens: 200
+                    }
+                  },
+                  description: '发送聊天消息'
+                },
+                completion: {
+                  query: 'mutation($input: CompletionInput!) { completion(input: $input) { choices { text } } }',
+                  variables: {
+                    input: {
+                      prompt: 'def fibonacci(n):',
+                      max_tokens: 150
+                    }
+                  },
+                  description: '代码补全'
+                }
+              }
             }
           }, null, 2),
           {
@@ -447,7 +555,10 @@ export default {
       // 404 处理
       return new Response(
         JSON.stringify({
-          errors: [{ message: 'GraphQL endpoint not found. Use POST / or POST /graphql' }]
+          errors: [{ 
+            message: 'GraphQL endpoint not found. Use POST / or POST /graphql for queries',
+            extensions: { code: 'NOT_FOUND' }
+          }]
         }),
         {
           status: 404,
@@ -458,7 +569,10 @@ export default {
     } catch (error) {
       return new Response(
         JSON.stringify({
-          errors: [{ message: `Internal server error: ${error.message}` }]
+          errors: [{ 
+            message: `Internal server error: ${error.message}`,
+            extensions: { code: 'INTERNAL_ERROR' }
+          }]
         }),
         {
           status: 500,
