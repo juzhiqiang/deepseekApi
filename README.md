@@ -2,24 +2,36 @@
 
 一个简单的 Cloudflare Workers 代理服务，为前端提供 DeepSeek API 接口。
 
-## 🚀 功能特性
+## 🚀 一键部署
 
-- ✅ 简单的 REST API 接口
-- ✅ 支持 CORS 跨域请求
-- ✅ DeepSeek API 代理
-- ✅ 前端友好的错误处理
-- ✅ 零配置部署
+```bash
+# 1. 克隆项目
+git clone https://github.com/juzhiqiang/deepseekApi.git
+cd deepseekApi
+
+# 2. 安装依赖
+npm install
+
+# 3. 一键设置和部署
+chmod +x setup.sh && ./setup.sh
+```
+
+就这么简单！脚本会自动：
+- 安装 Wrangler CLI
+- 登录 Cloudflare
+- 设置 API 密钥
+- 部署到 Workers
 
 ## 📡 API 接口
 
 ### 1. 获取模型列表
-```
-GET /api/models
+```bash
+GET https://your-worker.workers.dev/api/models
 ```
 
 ### 2. 聊天对话
-```
-POST /api/chat
+```bash
+POST https://your-worker.workers.dev/api/chat
 Content-Type: application/json
 
 {
@@ -33,8 +45,8 @@ Content-Type: application/json
 ```
 
 ### 3. 文本补全
-```
-POST /api/completions
+```bash
+POST https://your-worker.workers.dev/api/completions
 Content-Type: application/json
 
 {
@@ -45,40 +57,9 @@ Content-Type: application/json
 }
 ```
 
-## 🛠️ 部署步骤
-
-### 1. 克隆项目
-```bash
-git clone https://github.com/juzhiqiang/deepseekApi.git
-cd deepseekApi
-```
-
-### 2. 安装依赖
-```bash
-npm install
-```
-
-### 3. 配置 API 密钥
-```bash
-# 设置 DeepSeek API 密钥
-wrangler secret put DEEPSEEK_API_KEY
-# 输入你的 API 密钥
-```
-
-### 4. 本地测试
-```bash
-npm run dev
-```
-访问 http://localhost:8787 测试接口
-
-### 5. 部署到 Cloudflare
-```bash
-npm run deploy
-```
-
 ## 🌐 前端使用示例
 
-### JavaScript Fetch
+### 基础用法
 ```javascript
 // 聊天示例
 const response = await fetch('https://your-worker.workers.dev/api/chat', {
@@ -89,7 +70,7 @@ const response = await fetch('https://your-worker.workers.dev/api/chat', {
   body: JSON.stringify({
     model: 'deepseek-chat',
     messages: [
-      { role: 'user', content: '你好' }
+      { role: 'user', content: '你好，请介绍一下自己' }
     ],
     max_tokens: 200
   })
@@ -99,89 +80,121 @@ const data = await response.json();
 console.log(data.choices[0].message.content);
 ```
 
-### Axios
+### Vue.js 示例
 ```javascript
-import axios from 'axios';
-
-const response = await axios.post('https://your-worker.workers.dev/api/chat', {
-  model: 'deepseek-chat',
-  messages: [
-    { role: 'user', content: '你好' }
-  ],
-  max_tokens: 200
-});
-
-console.log(response.data.choices[0].message.content);
-```
-
-### jQuery
-```javascript
-$.ajax({
-  url: 'https://your-worker.workers.dev/api/chat',
-  method: 'POST',
-  contentType: 'application/json',
-  data: JSON.stringify({
-    model: 'deepseek-chat',
-    messages: [
-      { role: 'user', content: '你好' }
-    ],
-    max_tokens: 200
-  }),
-  success: function(data) {
-    console.log(data.choices[0].message.content);
+// 在 Vue 组件中使用
+export default {
+  data() {
+    return {
+      message: '',
+      response: ''
+    }
+  },
+  methods: {
+    async sendMessage() {
+      try {
+        const res = await fetch('https://your-worker.workers.dev/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [{ role: 'user', content: this.message }],
+            max_tokens: 200
+          })
+        });
+        
+        const data = await res.json();
+        this.response = data.choices[0].message.content;
+      } catch (error) {
+        console.error('Error:', error);
+      }
+    }
   }
-});
+}
 ```
 
-## 📝 测试页面
+### React 示例
+```javascript
+import { useState } from 'react';
+
+function ChatComponent() {
+  const [message, setMessage] = useState('');
+  const [response, setResponse] = useState('');
+
+  const sendMessage = async () => {
+    try {
+      const res = await fetch('https://your-worker.workers.dev/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [{ role: 'user', content: message }],
+          max_tokens: 200
+        })
+      });
+      
+      const data = await res.json();
+      setResponse(data.choices[0].message.content);
+    } catch (error) {
+      console.error('Error:', error);
+    }
+  };
+
+  return (
+    <div>
+      <input 
+        value={message} 
+        onChange={(e) => setMessage(e.target.value)} 
+        placeholder="输入消息..." 
+      />
+      <button onClick={sendMessage}>发送</button>
+      <div>{response}</div>
+    </div>
+  );
+}
+```
+
+## 🧪 测试页面
 
 打开 `examples/test.html` 可以直接测试所有接口功能。
 
-## ⚙️ 配置说明
+![测试页面](https://your-worker.workers.dev)
 
-### wrangler.toml
-```toml
-name = "deepseek-api"
-main = "src/index.js"
-compatibility_date = "2024-01-01"
+## ⚙️ 手动配置（可选）
 
-# 环境变量在 Cloudflare 控制台设置
-# DEEPSEEK_API_KEY = "your-api-key"
+如果需要手动设置：
+
+```bash
+# 设置 API 密钥
+wrangler secret put DEEPSEEK_API_KEY
+# 输入: sk-76c8f552ea8640a49376fcf64b1d5fc8
+
+# 部署
+npm run deploy
 ```
 
-### 环境变量
-- `DEEPSEEK_API_KEY`: DeepSeek API 密钥（必需）
+## 📊 可用模型
 
-## 🔒 安全注意事项
+- `deepseek-chat` - 通用对话模型
+- `deepseek-coder` - 代码生成模型  
+- `deepseek-math` - 数学推理模型
 
-1. **API 密钥安全**: 
-   - 永远不要在前端代码中暴露 API 密钥
-   - 使用 Cloudflare Workers 的环境变量存储
+## 🔒 安全说明
 
-2. **访问控制**: 
-   - 可以在 Worker 中添加域名白名单
-   - 考虑添加速率限制
+- API 密钥安全存储在 Cloudflare Workers 环境变量中
+- 支持 CORS，允许前端跨域访问
+- 所有请求通过 HTTPS 加密
 
-3. **HTTPS**: 
-   - Cloudflare Workers 自动提供 HTTPS
+## 📈 费用说明
 
-## 📊 监控和日志
+- Cloudflare Workers: 每天 100,000 次免费请求
+- DeepSeek API: 根据使用量计费
+- 部署完全免费
 
-在 Cloudflare 控制台中可以查看：
-- 请求数量和延迟
-- 错误率统计
-- 实时日志
+## 🤝 问题反馈
 
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
+如有问题，请提交 [Issue](https://github.com/juzhiqiang/deepseekApi/issues)
 
 ## 📄 许可证
 
 MIT License
-
-## 🔗 相关链接
-
-- [DeepSeek API 文档](https://platform.deepseek.com/docs)
-- [Cloudflare Workers 文档](https://developers.cloudflare.com/workers/)
-- [项目地址](https://github.com/juzhiqiang/deepseekApi)
