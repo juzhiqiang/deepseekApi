@@ -204,37 +204,38 @@ const resolvers = {
   }
 };
 
-// 改进的 GraphQL 执行器
+// 完全重写的 GraphQL 执行器 - 正确处理嵌套字段
 class GraphQLExecutor {
   static parseQuery(query) {
     const trimmed = query.trim();
     
-    // 移除注释和多余空格
-    const withoutComments = trimmed.replace(/#[^\r\n]*/g, '').replace(/\s+/g, ' ');
+    // 移除注释
+    const withoutComments = trimmed.replace(/#[^\r\n]*/g, '');
     
     // 检测操作类型
     let operationType = 'query';
     let operationName = null;
     
-    const mutationMatch = withoutComments.match(/^\s*mutation\s+(\w+)?\s*\(/i);
-    const queryMatch = withoutComments.match(/^\s*query\s+(\w+)?\s*\(/i);
-    
-    if (mutationMatch) {
-      operationType = 'mutation';
-      operationName = mutationMatch[1];
-    } else if (queryMatch) {
+    // 匹配操作定义
+    const operationMatch = withoutComments.match(/^\s*(query|mutation)\s*(\w+)?\s*(\([^)]*\))?\s*{/i);
+    if (operationMatch) {
+      operationType = operationMatch[1].toLowerCase();
+      operationName = operationMatch[2];
+    } else if (withoutComments.match(/^\s*{/)) {
+      // 匿名查询
       operationType = 'query';
-      operationName = queryMatch[1];
     }
     
-    // 提取字段部分
-    const bodyMatch = withoutComments.match(/{([^}]+(?:{[^}]*}[^}]*)*)}/);
-    if (!bodyMatch) {
+    // 提取操作体
+    const bodyStart = withoutComments.indexOf('{');
+    const bodyEnd = withoutComments.lastIndexOf('}');
+    
+    if (bodyStart === -1 || bodyEnd === -1) {
       throw new Error('Invalid GraphQL syntax: missing operation body');
     }
     
-    const body = bodyMatch[1];
-    const fields = this.parseFields(body);
+    const body = withoutComments.substring(bodyStart + 1, bodyEnd);
+    const fields = this.parseTopLevelFields(body);
     
     return {
       operationType,
@@ -243,34 +244,71 @@ class GraphQLExecutor {
     };
   }
   
-  static parseFields(content) {
+  static parseTopLevelFields(content) {
     const fields = [];
+    let i = 0;
+    const length = content.length;
     
-    // 简化的字段解析 - 只解析顶级字段名和参数
-    const fieldPattern = /(\w+)\s*(?:\(([^)]*)\))?\s*{/g;
-    let match;
-    
-    while ((match = fieldPattern.exec(content)) !== null) {
-      const fieldName = match[1];
-      const argsString = match[2] || '';
+    while (i < length) {
+      // 跳过空白字符
+      while (i < length && /\s/.test(content[i])) {
+        i++;
+      }
+      
+      if (i >= length) break;
+      
+      // 读取字段名
+      const fieldStart = i;
+      while (i < length && /[a-zA-Z0-9_]/.test(content[i])) {
+        i++;
+      }
+      
+      const fieldName = content.substring(fieldStart, i);
+      if (!fieldName) break;
+      
+      // 跳过空白
+      while (i < length && /\s/.test(content[i])) {
+        i++;
+      }
+      
+      // 检查是否有参数
+      let args = {};
+      if (i < length && content[i] === '(') {
+        const argsStart = i + 1;
+        let parenCount = 1;
+        i++;
+        
+        while (i < length && parenCount > 0) {
+          if (content[i] === '(') parenCount++;
+          else if (content[i] === ')') parenCount--;
+          i++;
+        }
+        
+        const argsString = content.substring(argsStart, i - 1);
+        args = this.parseArguments(argsString);
+      }
+      
+      // 跳过到字段体或下一个字段
+      while (i < length && /\s/.test(content[i])) {
+        i++;
+      }
+      
+      // 如果有选择集（{...}），跳过它
+      if (i < length && content[i] === '{') {
+        let braceCount = 1;
+        i++;
+        
+        while (i < length && braceCount > 0) {
+          if (content[i] === '{') braceCount++;
+          else if (content[i] === '}') braceCount--;
+          i++;
+        }
+      }
       
       fields.push({
         name: fieldName,
-        arguments: this.parseArguments(argsString)
+        arguments: args
       });
-    }
-    
-    // 如果没有找到带大括号的字段，解析简单字段
-    if (fields.length === 0) {
-      const simpleFields = content.match(/\w+/g) || [];
-      for (const fieldName of simpleFields) {
-        if (fieldName && !['__typename'].includes(fieldName)) {
-          fields.push({
-            name: fieldName,
-            arguments: {}
-          });
-        }
-      }
     }
     
     return fields;
@@ -280,18 +318,95 @@ class GraphQLExecutor {
     if (!argsString || !argsString.trim()) return {};
     
     const args = {};
-    
-    // 查找变量引用，如 $input
-    const varPattern = /(\w+)\s*:\s*\$(\w+)/g;
+    const argPattern = /(\w+)\s*:\s*(\$\w+|"[^"]*"|'[^']*'|true|false|null|\d+\.?\d*|\{[^}]*\}|\[[^\]]*\])/g;
     let match;
     
-    while ((match = varPattern.exec(argsString)) !== null) {
-      const argName = match[1];
-      const varName = match[2];
-      args[argName] = `$${varName}`;
+    while ((match = argPattern.exec(argsString)) !== null) {
+      const key = match[1];
+      let value = match[2].trim();
+      
+      if (value.startsWith('$')) {
+        // 变量引用
+        args[key] = value;
+      } else if (value.startsWith('"') && value.endsWith('"')) {
+        // 字符串
+        args[key] = value.slice(1, -1);
+      } else if (value.startsWith("'") && value.endsWith("'")) {
+        // 字符串
+        args[key] = value.slice(1, -1);
+      } else if (value === 'true' || value === 'false') {
+        // 布尔值
+        args[key] = value === 'true';
+      } else if (value === 'null') {
+        // null 值
+        args[key] = null;
+      } else if (!isNaN(value) && !isNaN(parseFloat(value))) {
+        // 数字
+        args[key] = parseFloat(value);
+      } else if (value.startsWith('{')) {
+        // 对象（输入类型）
+        args[key] = this.parseInputObject(value);
+      } else if (value.startsWith('[')) {
+        // 数组
+        args[key] = this.parseInputArray(value);
+      } else {
+        // 其他类型，保持原样
+        args[key] = value;
+      }
     }
     
     return args;
+  }
+  
+  static parseInputObject(objString) {
+    // 简化的对象解析
+    try {
+      // 将 GraphQL 输入语法转换为 JSON
+      const jsonLike = objString
+        .replace(/(\w+):/g, '"$1":')
+        .replace(/'/g, '"');
+      return JSON.parse(jsonLike);
+    } catch (e) {
+      // 回退到手动解析
+      const obj = {};
+      const content = objString.slice(1, -1); // 移除 {}
+      const fieldPattern = /(\w+)\s*:\s*([^,}]+)/g;
+      let match;
+      
+      while ((match = fieldPattern.exec(content)) !== null) {
+        const key = match[1];
+        let value = match[2].trim();
+        
+        if (value.startsWith('"') && value.endsWith('"')) {
+          obj[key] = value.slice(1, -1);
+        } else if (value === 'true' || value === 'false') {
+          obj[key] = value === 'true';
+        } else if (!isNaN(value)) {
+          obj[key] = parseFloat(value);
+        } else if (value.startsWith('[')) {
+          obj[key] = this.parseInputArray(value);
+        } else if (value.startsWith('{')) {
+          obj[key] = this.parseInputObject(value);
+        } else {
+          obj[key] = value;
+        }
+      }
+      
+      return obj;
+    }
+  }
+  
+  static parseInputArray(arrString) {
+    try {
+      // 将 GraphQL 数组语法转换为 JSON
+      const jsonLike = arrString
+        .replace(/(\w+):/g, '"$1":')
+        .replace(/'/g, '"');
+      return JSON.parse(jsonLike);
+    } catch (e) {
+      // 回退到简单解析
+      return [];
+    }
   }
   
   static async execute(query, variables = {}, context) {
@@ -300,12 +415,12 @@ class GraphQLExecutor {
       console.log('With variables:', JSON.stringify(variables));
       
       const parsed = this.parseQuery(query);
-      console.log('Parsed operation:', parsed);
+      console.log('Parsed operation:', JSON.stringify(parsed));
       
       const result = { data: {} };
       
       for (const field of parsed.fields) {
-        console.log(`Processing field: ${field.name}`);
+        console.log(`Processing top-level field: ${field.name}`);
         
         if (parsed.operationType === 'query') {
           if (resolvers.Query[field.name]) {
