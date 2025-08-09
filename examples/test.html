@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepSeek API 测试页面</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .section {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007cba;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px 0;
+        }
+        button:hover {
+            background: #005a8b;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .response {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .error {
+            background: #ffebee;
+            border-color: #e57373;
+            color: #c62828;
+        }
+        .loading {
+            opacity: 0.6;
+        }
+    </style>
+</head>
+<body>
+    <h1>DeepSeek API 测试页面</h1>
+    
+    <div class="section">
+        <h3>🔧 API 配置</h3>
+        <input type="text" id="apiUrl" placeholder="https://your-worker.your-subdomain.workers.dev" 
+               value="http://localhost:8787">
+        <small>输入你的 Cloudflare Worker URL</small>
+    </div>
+
+    <div class="section">
+        <h3>📋 1. 获取模型列表</h3>
+        <button onclick="getModels()">获取模型</button>
+        <div id="modelsResult" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h3>💬 2. 聊天对话</h3>
+        <select id="chatModel">
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-coder">deepseek-coder</option>
+            <option value="deepseek-math">deepseek-math</option>
+        </select>
+        <textarea id="chatMessage" rows="3" placeholder="输入你的消息...">你好，请介绍一下自己</textarea>
+        <label>
+            最大 Token 数: <input type="number" id="chatMaxTokens" value="200" min="1" max="4000">
+        </label>
+        <label>
+            Temperature: <input type="number" id="chatTemperature" value="0.7" min="0" max="2" step="0.1">
+        </label>
+        <button onclick="sendChat()">发送消息</button>
+        <div id="chatResult" class="response" style="display: none;"></div>
+    </div>
+
+    <div class="section">
+        <h3>📝 3. 文本补全</h3>
+        <select id="completionModel">
+            <option value="deepseek-coder">deepseek-coder</option>
+            <option value="deepseek-chat">deepseek-chat</option>
+        </select>
+        <textarea id="completionPrompt" rows="3" placeholder="输入补全提示...">写一个 Python 函数，用于计算斐波那契数列：</textarea>
+        <label>
+            最大 Token 数: <input type="number" id="completionMaxTokens" value="200" min="1" max="4000">
+        </label>
+        <button onclick="getCompletion()">获取补全</button>
+        <div id="completionResult" class="response" style="display: none;"></div>
+    </div>
+
+    <script>
+        function getApiUrl() {
+            const url = document.getElementById('apiUrl').value.trim();
+            if (!url) {
+                alert('请先输入 API URL');
+                return null;
+            }
+            return url;
+        }
+
+        function showResult(elementId, data, isError = false) {
+            const element = document.getElementById(elementId);
+            element.style.display = 'block';
+            element.className = isError ? 'response error' : 'response';
+            element.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        }
+
+        function setLoading(buttonElement, isLoading) {
+            if (isLoading) {
+                buttonElement.disabled = true;
+                buttonElement.classList.add('loading');
+                buttonElement.textContent = '处理中...';
+            } else {
+                buttonElement.disabled = false;
+                buttonElement.classList.remove('loading');
+            }
+        }
+
+        async function getModels() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const apiUrl = getApiUrl();
+                if (!apiUrl) return;
+
+                const response = await fetch(`${apiUrl}/api/models`);
+                const data = await response.json();
+
+                if (response.ok) {
+                    showResult('modelsResult', data);
+                } else {
+                    showResult('modelsResult', data, true);
+                }
+            } catch (error) {
+                showResult('modelsResult', `网络错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+
+        async function sendChat() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const apiUrl = getApiUrl();
+                if (!apiUrl) return;
+
+                const message = document.getElementById('chatMessage').value.trim();
+                if (!message) {
+                    alert('请输入消息');
+                    return;
+                }
+
+                const requestBody = {
+                    model: document.getElementById('chatModel').value,
+                    messages: [
+                        { role: 'user', content: message }
+                    ],
+                    max_tokens: parseInt(document.getElementById('chatMaxTokens').value),
+                    temperature: parseFloat(document.getElementById('chatTemperature').value)
+                };
+
+                const response = await fetch(`${apiUrl}/api/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.choices && data.choices[0]) {
+                    const reply = data.choices[0].message.content;
+                    const usage = data.usage;
+                    const result = `回复:\n${reply}\n\n使用情况:\n${JSON.stringify(usage, null, 2)}`;
+                    showResult('chatResult', result);
+                } else {
+                    showResult('chatResult', data, true);
+                }
+            } catch (error) {
+                showResult('chatResult', `网络错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+
+        async function getCompletion() {
+            const button = event.target;
+            const originalText = button.textContent;
+            setLoading(button, true);
+
+            try {
+                const apiUrl = getApiUrl();
+                if (!apiUrl) return;
+
+                const prompt = document.getElementById('completionPrompt').value.trim();
+                if (!prompt) {
+                    alert('请输入补全提示');
+                    return;
+                }
+
+                const requestBody = {
+                    model: document.getElementById('completionModel').value,
+                    prompt: prompt,
+                    max_tokens: parseInt(document.getElementById('completionMaxTokens').value),
+                    temperature: 0.7
+                };
+
+                const response = await fetch(`${apiUrl}/api/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.choices && data.choices[0]) {
+                    const completion = data.choices[0].text;
+                    const usage = data.usage;
+                    const result = `补全结果:\n${completion}\n\n使用情况:\n${JSON.stringify(usage, null, 2)}`;
+                    showResult('completionResult', result);
+                } else {
+                    showResult('completionResult', data, true);
+                }
+            } catch (error) {
+                showResult('completionResult', `网络错误: ${error.message}`, true);
+            } finally {
+                button.textContent = originalText;
+                setLoading(button, false);
+            }
+        }
+    </script>
+</body>
+</html>
