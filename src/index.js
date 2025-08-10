@@ -1,18 +1,29 @@
-// DeepSeek GraphQL API for Cloudflare Workers
-// 专为前端调用设计的 GraphQL 接口
+// DeepSeek GraphQL Streaming API for Cloudflare Workers
+// 支持流式响应的 GraphQL 接口
 
 // CORS 配置
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
   'Access-Control-Max-Age': '86400',
+};
+
+// 流式响应的 CORS 配置
+const streamCorsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Accept',
+  'Access-Control-Max-Age': '86400',
+  'Cache-Control': 'no-cache',
+  'Connection': 'keep-alive',
+  'Content-Type': 'text/event-stream',
 };
 
 // DeepSeek API 基础 URL
 const DEEPSEEK_API_BASE = 'https://api.deepseek.com/v1';
 
-// GraphQL Schema 定义
+// GraphQL Schema 定义 - 添加流式支持
 const typeDefs = `
   type Query {
     models: [Model!]!
@@ -22,6 +33,11 @@ const typeDefs = `
   type Mutation {
     chat(input: ChatInput!): ChatResponse!
     completion(input: CompletionInput!): CompletionResponse!
+  }
+  
+  type Subscription {
+    chatStream(input: ChatInput!): ChatStreamChunk!
+    completionStream(input: CompletionInput!): CompletionStreamChunk!
   }
   
   type Model {
@@ -72,12 +88,47 @@ const typeDefs = `
     total_tokens: Int!
   }
   
+  # 流式响应类型
+  type ChatStreamChunk {
+    id: String!
+    object: String!
+    created: Int!
+    model: String!
+    choices: [ChatStreamChoice!]!
+  }
+  
+  type ChatStreamChoice {
+    index: Int!
+    delta: Delta!
+    finish_reason: String
+  }
+  
+  type Delta {
+    role: String
+    content: String
+  }
+  
+  type CompletionStreamChunk {
+    id: String!
+    object: String!
+    created: Int!
+    model: String!
+    choices: [CompletionStreamChoice!]!
+  }
+  
+  type CompletionStreamChoice {
+    text: String!
+    index: Int!
+    finish_reason: String
+  }
+  
   input ChatInput {
     model: String! = "deepseek-chat"
     messages: [MessageInput!]!
     max_tokens: Int = 1000
     temperature: Float = 0.7
     top_p: Float = 1.0
+    stream: Boolean = false
   }
   
   input MessageInput {
@@ -91,13 +142,14 @@ const typeDefs = `
     max_tokens: Int = 1000
     temperature: Float = 0.7
     top_p: Float = 1.0
+    stream: Boolean = false
   }
 `;
 
 // GraphQL 解析器
 const resolvers = {
   Query: {
-    hello: () => 'DeepSeek GraphQL API is running!',
+    hello: () => 'DeepSeek GraphQL Streaming API is running!',
     
     models: async (_, __, { env }) => {
       try {
@@ -124,9 +176,6 @@ const resolvers = {
   Mutation: {
     chat: async (_, { input }, { env }) => {
       try {
-        console.log('Chat resolver received input:', JSON.stringify(input));
-        
-        // 参数验证
         if (!input || !input.messages || !Array.isArray(input.messages) || input.messages.length === 0) {
           throw new Error('messages 参数是必需的，且必须是非空数组');
         }
@@ -139,8 +188,6 @@ const resolvers = {
           top_p: input.top_p || 1.0,
           stream: false
         };
-
-        console.log('Sending request to DeepSeek:', JSON.stringify(requestBody));
 
         const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
           method: 'POST',
@@ -157,17 +204,14 @@ const resolvers = {
         }
 
         const data = await response.json();
-        console.log('DeepSeek response:', JSON.stringify(data));
         return data;
       } catch (error) {
-        console.error('Chat error:', error);
         throw new Error(`聊天请求失败: ${error.message}`);
       }
     },
     
     completion: async (_, { input }, { env }) => {
       try {
-        // 参数验证
         if (!input || !input.prompt || typeof input.prompt !== 'string') {
           throw new Error('prompt 参数是必需的，且必须是字符串');
         }
@@ -204,29 +248,148 @@ const resolvers = {
   }
 };
 
-// 完全重写的 GraphQL 执行器 - 正确处理嵌套字段
+// 流式响应处理器
+class StreamingHandler {
+  static async createChatStream(input, env) {
+    const requestBody = {
+      model: input.model || 'deepseek-chat',
+      messages: input.messages,
+      max_tokens: input.max_tokens || 1000,
+      temperature: input.temperature || 0.7,
+      top_p: input.top_p || 1.0,
+      stream: true
+    };
+
+    const response = await fetch(`${DEEPSEEK_API_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`DeepSeek API 错误 ${response.status}: ${errorText}`);
+    }
+
+    return response.body;
+  }
+
+  static async createCompletionStream(input, env) {
+    const requestBody = {
+      model: input.model || 'deepseek-coder',
+      prompt: input.prompt,
+      max_tokens: input.max_tokens || 1000,
+      temperature: input.temperature || 0.7,
+      top_p: input.top_p || 1.0,
+      stream: true
+    };
+
+    const response = await fetch(`${DEEPSEEK_API_BASE}/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`DeepSeek API 错误 ${response.status}: ${errorText}`);
+    }
+
+    return response.body;
+  }
+
+  static createServerSentEventStream(sourceStream, operationType = 'chat') {
+    const { readable, writable } = new TransformStream();
+    const writer = writable.getWriter();
+
+    this.processStream(sourceStream, writer, operationType).catch(error => {
+      console.error('Stream processing error:', error);
+      writer.write(new TextEncoder().encode(`event: error\ndata: ${JSON.stringify({ 
+        errors: [{ message: error.message }] 
+      })}\n\n`));
+      writer.close();
+    });
+
+    return readable;
+  }
+
+  static async processStream(sourceStream, writer, operationType) {
+    const reader = sourceStream.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) {
+          await writer.write(new TextEncoder().encode(`event: complete\ndata: {"type":"complete"}\n\n`));
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            
+            if (data === '[DONE]') {
+              await writer.write(new TextEncoder().encode(`event: complete\ndata: {"type":"complete"}\n\n`));
+              continue;
+            }
+
+            try {
+              const jsonData = JSON.parse(data);
+              
+              const graphqlResponse = {
+                data: {
+                  [operationType === 'chat' ? 'chatStream' : 'completionStream']: jsonData
+                }
+              };
+
+              await writer.write(new TextEncoder().encode(
+                `event: data\ndata: ${JSON.stringify(graphqlResponse)}\n\n`
+              ));
+            } catch (parseError) {
+              console.error('JSON parse error:', parseError);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Stream read error:', error);
+      throw error;
+    } finally {
+      await writer.close();
+    }
+  }
+}
+
+// GraphQL 执行器类
 class GraphQLExecutor {
   static parseQuery(query) {
     const trimmed = query.trim();
-    
-    // 移除注释
     const withoutComments = trimmed.replace(/#[^\r\n]*/g, '');
     
-    // 检测操作类型
     let operationType = 'query';
     let operationName = null;
     
-    // 匹配操作定义
-    const operationMatch = withoutComments.match(/^\s*(query|mutation)\s*(\w+)?\s*(\([^)]*\))?\s*{/i);
+    const operationMatch = withoutComments.match(/^\s*(query|mutation|subscription)\s*(\w+)?\s*(\([^)]*\))?\s*{/i);
     if (operationMatch) {
       operationType = operationMatch[1].toLowerCase();
       operationName = operationMatch[2];
     } else if (withoutComments.match(/^\s*{/)) {
-      // 匿名查询
       operationType = 'query';
     }
     
-    // 提取操作体
     const bodyStart = withoutComments.indexOf('{');
     const bodyEnd = withoutComments.lastIndexOf('}');
     
@@ -250,14 +413,12 @@ class GraphQLExecutor {
     const length = content.length;
     
     while (i < length) {
-      // 跳过空白字符
       while (i < length && /\s/.test(content[i])) {
         i++;
       }
       
       if (i >= length) break;
       
-      // 读取字段名
       const fieldStart = i;
       while (i < length && /[a-zA-Z0-9_]/.test(content[i])) {
         i++;
@@ -266,12 +427,10 @@ class GraphQLExecutor {
       const fieldName = content.substring(fieldStart, i);
       if (!fieldName) break;
       
-      // 跳过空白
       while (i < length && /\s/.test(content[i])) {
         i++;
       }
       
-      // 检查是否有参数
       let args = {};
       if (i < length && content[i] === '(') {
         const argsStart = i + 1;
@@ -288,12 +447,10 @@ class GraphQLExecutor {
         args = this.parseArguments(argsString);
       }
       
-      // 跳过到字段体或下一个字段
       while (i < length && /\s/.test(content[i])) {
         i++;
       }
       
-      // 如果有选择集（{...}），跳过它
       if (i < length && content[i] === '{') {
         let braceCount = 1;
         i++;
@@ -326,31 +483,22 @@ class GraphQLExecutor {
       let value = match[2].trim();
       
       if (value.startsWith('$')) {
-        // 变量引用
         args[key] = value;
       } else if (value.startsWith('"') && value.endsWith('"')) {
-        // 字符串
         args[key] = value.slice(1, -1);
       } else if (value.startsWith("'") && value.endsWith("'")) {
-        // 字符串
         args[key] = value.slice(1, -1);
       } else if (value === 'true' || value === 'false') {
-        // 布尔值
         args[key] = value === 'true';
       } else if (value === 'null') {
-        // null 值
         args[key] = null;
       } else if (!isNaN(value) && !isNaN(parseFloat(value))) {
-        // 数字
         args[key] = parseFloat(value);
       } else if (value.startsWith('{')) {
-        // 对象（输入类型）
         args[key] = this.parseInputObject(value);
       } else if (value.startsWith('[')) {
-        // 数组
         args[key] = this.parseInputArray(value);
       } else {
-        // 其他类型，保持原样
         args[key] = value;
       }
     }
@@ -359,17 +507,14 @@ class GraphQLExecutor {
   }
   
   static parseInputObject(objString) {
-    // 简化的对象解析
     try {
-      // 将 GraphQL 输入语法转换为 JSON
       const jsonLike = objString
         .replace(/(\w+):/g, '"$1":')
         .replace(/'/g, '"');
       return JSON.parse(jsonLike);
     } catch (e) {
-      // 回退到手动解析
       const obj = {};
-      const content = objString.slice(1, -1); // 移除 {}
+      const content = objString.slice(1, -1);
       const fieldPattern = /(\w+)\s*:\s*([^,}]+)/g;
       let match;
       
@@ -398,34 +543,24 @@ class GraphQLExecutor {
   
   static parseInputArray(arrString) {
     try {
-      // 将 GraphQL 数组语法转换为 JSON
       const jsonLike = arrString
         .replace(/(\w+):/g, '"$1":')
         .replace(/'/g, '"');
       return JSON.parse(jsonLike);
     } catch (e) {
-      // 回退到简单解析
       return [];
     }
   }
   
   static async execute(query, variables = {}, context) {
     try {
-      console.log('Executing GraphQL query:', query);
-      console.log('With variables:', JSON.stringify(variables));
-      
       const parsed = this.parseQuery(query);
-      console.log('Parsed operation:', JSON.stringify(parsed));
-      
       const result = { data: {} };
       
       for (const field of parsed.fields) {
-        console.log(`Processing top-level field: ${field.name}`);
-        
         if (parsed.operationType === 'query') {
           if (resolvers.Query[field.name]) {
             const resolvedArgs = this.resolveArguments(field.arguments, variables);
-            console.log(`Resolved args for ${field.name}:`, JSON.stringify(resolvedArgs));
             result.data[field.name] = await resolvers.Query[field.name](null, resolvedArgs, context);
           } else {
             throw new Error(`Unknown query field: ${field.name}`);
@@ -433,17 +568,17 @@ class GraphQLExecutor {
         } else if (parsed.operationType === 'mutation') {
           if (resolvers.Mutation[field.name]) {
             const resolvedArgs = this.resolveArguments(field.arguments, variables);
-            console.log(`Resolved args for ${field.name}:`, JSON.stringify(resolvedArgs));
             result.data[field.name] = await resolvers.Mutation[field.name](null, resolvedArgs, context);
           } else {
             throw new Error(`Unknown mutation field: ${field.name}`);
           }
+        } else if (parsed.operationType === 'subscription') {
+          throw new Error('Subscriptions should be handled via /stream endpoint');
         }
       }
       
       return result;
     } catch (error) {
-      console.error('GraphQL execution error:', error);
       return {
         errors: [{
           message: error.message,
@@ -479,7 +614,6 @@ class GraphQLExecutor {
 
 export default {
   async fetch(request, env, ctx) {
-    // 处理 CORS 预检请求
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
@@ -490,7 +624,6 @@ export default {
     try {
       const url = new URL(request.url);
       
-      // 检查 API Key
       if (!env.DEEPSEEK_API_KEY) {
         return new Response(
           JSON.stringify({
@@ -506,7 +639,81 @@ export default {
         );
       }
 
-      // GraphQL 端点
+      // GraphQL 流式端点
+      if (url.pathname === '/stream' && request.method === 'POST') {
+        const body = await request.json();
+        const { query, variables = {}, operationName } = body;
+
+        if (!query) {
+          return new Response(
+            JSON.stringify({
+              errors: [{ 
+                message: 'No query provided in request body',
+                extensions: { code: 'BAD_REQUEST' }
+              }]
+            }),
+            {
+              status: 400,
+              headers: { 'Content-Type': 'application/json', ...corsHeaders },
+            }
+          );
+        }
+
+        try {
+          const parsed = GraphQLExecutor.parseQuery(query);
+          
+          if (parsed.operationType !== 'subscription') {
+            return new Response(
+              JSON.stringify({
+                errors: [{ 
+                  message: 'Stream endpoint only supports subscription operations',
+                  extensions: { code: 'BAD_REQUEST' }
+                }]
+              }),
+              {
+                status: 400,
+                headers: { 'Content-Type': 'application/json', ...corsHeaders },
+              }
+            );
+          }
+
+          for (const field of parsed.fields) {
+            const resolvedArgs = GraphQLExecutor.resolveArguments(field.arguments, variables);
+            
+            if (field.name === 'chatStream') {
+              const sourceStream = await StreamingHandler.createChatStream(resolvedArgs.input, env);
+              const eventStream = StreamingHandler.createServerSentEventStream(sourceStream, 'chat');
+              
+              return new Response(eventStream, {
+                status: 200,
+                headers: streamCorsHeaders,
+              });
+            } else if (field.name === 'completionStream') {
+              const sourceStream = await StreamingHandler.createCompletionStream(resolvedArgs.input, env);
+              const eventStream = StreamingHandler.createServerSentEventStream(sourceStream, 'completion');
+              
+              return new Response(eventStream, {
+                status: 200,
+                headers: streamCorsHeaders,
+              });
+            } else {
+              throw new Error(`Unknown subscription field: ${field.name}`);
+            }
+          }
+        } catch (error) {
+          return new Response(
+            `event: error\ndata: ${JSON.stringify({
+              errors: [{ message: error.message }]
+            })}\n\n`,
+            {
+              status: 200,
+              headers: streamCorsHeaders,
+            }
+          );
+        }
+      }
+
+      // 标准 GraphQL 端点
       if ((url.pathname === '/' || url.pathname === '/graphql') && request.method === 'POST') {
         const body = await request.json();
         const { query, variables = {}, operationName } = body;
@@ -526,7 +733,6 @@ export default {
           );
         }
 
-        // 执行 GraphQL 查询
         const result = await GraphQLExecutor.execute(query, variables, { env });
 
         return new Response(JSON.stringify(result), {
@@ -535,14 +741,17 @@ export default {
         });
       }
 
-      // GraphQL Schema 信息 (GET 请求)
+      // GraphQL Schema 信息
       if ((url.pathname === '/' || url.pathname === '/graphql') && request.method === 'GET') {
         return new Response(
           JSON.stringify({
             data: {
-              message: 'DeepSeek GraphQL API',
-              version: '1.0.0',
-              endpoint: url.origin + '/',
+              message: 'DeepSeek GraphQL Streaming API',
+              version: '2.0.0',
+              endpoints: {
+                graphql: url.origin + '/',
+                stream: url.origin + '/stream'
+              },
               schema: typeDefs,
               examples: {
                 getModels: {
@@ -559,6 +768,17 @@ export default {
                   },
                   description: '发送聊天消息'
                 },
+                chatStream: {
+                  query: 'subscription($input: ChatInput!) { chatStream(input: $input) { choices { delta { content } } } }',
+                  variables: {
+                    input: {
+                      messages: [{ role: 'user', content: 'Hello!' }],
+                      max_tokens: 200
+                    }
+                  },
+                  endpoint: '/stream',
+                  description: '流式聊天（Server-Sent Events）'
+                },
                 completion: {
                   query: 'mutation($input: CompletionInput!) { completion(input: $input) { choices { text } } }',
                   variables: {
@@ -568,6 +788,47 @@ export default {
                     }
                   },
                   description: '代码补全'
+                },
+                completionStream: {
+                  query: 'subscription($input: CompletionInput!) { completionStream(input: $input) { choices { text } } }',
+                  variables: {
+                    input: {
+                      prompt: 'def fibonacci(n):',
+                      max_tokens: 150
+                    }
+                  },
+                  endpoint: '/stream',
+                  description: '流式代码补全（Server-Sent Events）'
+                }
+              },
+              usage: {
+                standardGraphQL: {
+                  url: url.origin + '/',
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: {
+                    query: 'query { hello }',
+                    variables: {}
+                  }
+                },
+                streamingGraphQL: {
+                  url: url.origin + '/stream',
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream'
+                  },
+                  body: {
+                    query: 'subscription($input: ChatInput!) { chatStream(input: $input) { choices { delta { content } } } }',
+                    variables: {
+                      input: {
+                        messages: [{ role: 'user', content: 'Hello!' }]
+                      }
+                    }
+                  },
+                  note: 'Returns Server-Sent Events stream'
                 }
               }
             }
@@ -579,11 +840,10 @@ export default {
         );
       }
 
-      // 404 处理
       return new Response(
         JSON.stringify({
           errors: [{ 
-            message: 'GraphQL endpoint not found. Use POST / or POST /graphql for queries',
+            message: 'Endpoint not found. Use POST / for GraphQL queries or POST /stream for streaming subscriptions',
             extensions: { code: 'NOT_FOUND' }
           }]
         }),
